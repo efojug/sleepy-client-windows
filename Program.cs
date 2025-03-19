@@ -35,16 +35,14 @@ namespace sleepy_client_windows
         // 异步发送请求
         static async Task SendPutRequest(string url, int status, string app)
         {
-            using (HttpClient client = new HttpClient())
+            using HttpClient client = new();
+            try
             {
-                try
-                {
-                    await client.PutAsync(url + $"?secret={secret}&device={device}&status={status}&app={app}", null);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("发送请求失败: \n" + ex);
-                }
+                await client.PutAsync(url + $"?secret={secret}&device={device}&status={status}&app={app}", null);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("发送请求失败: \n" + ex);
             }
         }
 
@@ -122,7 +120,7 @@ namespace sleepy_client_windows
             idleTimer.Tick += async (s, e) =>
             {
                 string currentApp = GetForegroundProcessTitle();
-                if (GetIdleTime() < 45 * 60 * 1000 || currentApp != lastForegroundApp)
+                if (GetIdleTime() < 45000 || currentApp != lastForegroundApp)
                 {
                     lastForegroundApp = currentApp;
                     await SendPutRequest(server, 1, currentApp);
@@ -132,7 +130,7 @@ namespace sleepy_client_windows
                 }
             };
 
-            // 正常模式：每5分钟获取前台应用并发送 PUT 请求
+            // 正常模式：每5分钟获取前台应用并发送
             putTimer = new Timer();
             putTimer.Interval = 300000;
             putTimer.Tick += async (s, e) =>
@@ -142,6 +140,7 @@ namespace sleepy_client_windows
                     await SendPutRequest(server, 0, "");
                     isSleepMode = true;
                     putTimer.Stop();
+                    return;
                 }
 
                 string currentApp = GetForegroundProcessTitle();
