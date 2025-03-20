@@ -1,11 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Diagnostics;
-using Timer = System.Windows.Forms.Timer;
 using SharpConfig;
+using Timer = System.Threading.Timer;
 
 namespace sleepy_client_windows
 {
-
     static class Program
     {
         // WinAPI获取最后一次输入时间
@@ -18,7 +17,7 @@ namespace sleepy_client_windows
             public uint dwTime;
         }
 
-        // 系统空闲时间
+        // 获取系统空闲时间（毫秒）
         static long GetIdleTime()
         {
             LASTINPUTINFO lastInputInfo = new();
@@ -32,17 +31,20 @@ namespace sleepy_client_windows
         static string secret;
         static int device;
 
+        // 静态 HttpClient 实例
+        static readonly HttpClient client = new();
+
         // 异步发送请求
         static async Task SendPutRequest(string url, int status, string app)
         {
-            using HttpClient client = new();
             try
             {
                 await client.PutAsync(url + $"?secret={secret}&device={device}&status={status}&app={app}", null);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("发送请求失败: \n" + ex);
+                // 可在此处记录错误日志，或调用 Debug.WriteLine
+                Debug.WriteLine("发送请求失败: " + ex);
             }
         }
 
@@ -59,35 +61,41 @@ namespace sleepy_client_windows
             }
             catch (Exception ex)
             {
-                MessageBox.Show("获取前台窗口失败: \n" + ex);
+                Debug.WriteLine("获取前台窗口失败: " + ex);
                 return "Unknown";
             }
         }
 
         static NotifyIcon trayIcon;
+        // 使用 System.Threading.Timer 替代 System.Windows.Forms.Timer
         static Timer putTimer;
         static Timer idleTimer;
         static bool isSleepMode = false;
         static string lastForegroundApp = "";
-        
+
+        // 定时器周期（毫秒）
+        const int PutInterval = 300000;   // 5分钟
+        const int IdleInterval = 45000;     // 45秒
 
         [STAThread]
         static void Main()
         {
+            // 避免多实例
             if (Process.GetProcessesByName(Application.ProductName).Length > 1)
             {
-                MessageBox.Show("program already running.");
                 Environment.Exit(-1);
             }
+
             try
             {
                 var section = Configuration.LoadFromFile("config.ini")["Main"];
                 server = section["server"].StringValue;
                 secret = section["secret"].StringValue;
                 device = section["device"].IntValue;
-            } catch (Exception ex)
+            }
+            catch (Exception ex)
             {
-                MessageBox.Show("load config failed! error: \n" + ex);
+                Debug.WriteLine("加载配置失败: " + ex);
                 Environment.Exit(-1);
             }
 
@@ -97,7 +105,6 @@ namespace sleepy_client_windows
             // 创建系统托盘图标
             trayIcon = new NotifyIcon
             {
-                // 加载图标
                 Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath),
                 Visible = true,
                 Text = "Sleepy"
@@ -114,42 +121,48 @@ namespace sleepy_client_windows
             menu.Items.Add(exitItem);
             trayIcon.ContextMenuStrip = menu;
 
-            //休眠模式计时器 每45秒检测是否恢复活动
-            idleTimer = new Timer();
-            idleTimer.Interval = 45000;
-            idleTimer.Tick += async (s, e) =>
-            {
-                string currentApp = GetForegroundProcessTitle();
-                if (GetIdleTime() < 45000 || currentApp != lastForegroundApp)
-                {
-                    lastForegroundApp = currentApp;
-                    await SendPutRequest(server, 1, currentApp);
-                    isSleepMode = false;
-                    putTimer.Start();
-                    idleTimer.Stop();
-                }
-            };
+            // 初始化两个计时器（初始均不启动）
+            putTimer = new Timer(PutTimerCallback, null, Timeout.Infinite, Timeout.Infinite);
+            idleTimer = new Timer(IdleTimerCallback, null, Timeout.Infinite, Timeout.Infinite);
 
-            // 正常模式：每5分钟获取前台应用并发送
-            putTimer = new Timer();
-            putTimer.Interval = 300000;
-            putTimer.Tick += async (s, e) =>
-            {
-                if (!isSleepMode && GetIdleTime() >= 15 * 60 * 1000)
-                {
-                    await SendPutRequest(server, 0, "");
-                    isSleepMode = true;
-                    putTimer.Stop();
-                    return;
-                }
-
-                string currentApp = GetForegroundProcessTitle();
-                lastForegroundApp = currentApp;
-                await SendPutRequest(server, 1, currentApp);
-            };
-            putTimer.Start();
+            // 启动正常模式计时器
+            putTimer.Change(0, PutInterval);
 
             Application.Run();
+        }
+
+        // putTimer 的回调：正常模式下每5分钟执行一次
+        static async void PutTimerCallback(object state)
+        {
+            // 当空闲超过15分钟，则发送休眠请求，并切换到休眠模式
+            if (!isSleepMode && GetIdleTime() >= 15 * 60 * 1000)
+            {
+                await SendPutRequest(server, 0, "");
+                isSleepMode = true;
+                // 停止 putTimer，启动 idleTimer
+                putTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                idleTimer.Change(0, IdleInterval);
+                return;
+            }
+
+            string currentApp = GetForegroundProcessTitle();
+            lastForegroundApp = currentApp;
+            await SendPutRequest(server, 1, currentApp);
+        }
+
+        // idleTimer 的回调：休眠模式下每45秒检测是否恢复活动
+        static async void IdleTimerCallback(object state)
+        {
+            string currentApp = GetForegroundProcessTitle();
+            if (GetIdleTime() < IdleInterval || currentApp != lastForegroundApp)
+            {
+                lastForegroundApp = currentApp;
+                await SendPutRequest(server, 1, currentApp);
+                isSleepMode = false;
+                // 停止 idleTimer，恢复正常模式
+                idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                putTimer.Change(0, PutInterval);
+            }
         }
     }
 
