@@ -1,6 +1,8 @@
-using System.Runtime.InteropServices;
-using System.Diagnostics;
 using SharpConfig;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using Timer = System.Threading.Timer;
 
 namespace sleepy_client_windows
@@ -39,11 +41,10 @@ namespace sleepy_client_windows
         {
             try
             {
-                await client.PutAsync(url + $"?secret={secret}&device={device}&status={status}&app={app}", null);
+                await client.PostAsync(url, new StringContent(JsonSerializer.Serialize(new { secret, device, status, app }), Encoding.UTF8, "application/json"));
             }
             catch (Exception ex)
             {
-                // 可在此处记录错误日志，或调用 Debug.WriteLine
                 Debug.WriteLine("发送请求失败: " + ex);
             }
         }
@@ -52,8 +53,7 @@ namespace sleepy_client_windows
         static string GetForegroundProcessTitle()
         {
             IntPtr hwnd = Win32Api.GetForegroundWindow();
-            uint processId;
-            Win32Api.GetWindowThreadProcessId(hwnd, out processId);
+            Win32Api.GetWindowThreadProcessId(hwnd, out uint processId);
             try
             {
                 Process proc = Process.GetProcessById((int)processId);
